@@ -1,0 +1,112 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user profile information and roles.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "auditor", "viewer"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "DDProject": {
+      "title": "Design and Development Project",
+      "description": "Represents an ISO 9001:2015 8.3 D&D project.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "description": "Unique code like DD0001" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "source": { "type": "string", "enum": ["COMMERCIAL", "PRODUCTION", "COMPLAINT"] },
+        "currentStep": { "type": "integer", "description": "1 to 7" },
+        "status": { "type": "string", "enum": ["ACTIVE", "APPROVED", "REJECTED"] },
+        "planning": {
+          "type": "object",
+          "properties": {
+            "responsible": { "type": "string" },
+            "startDate": { "type": "string", "format": "date" },
+            "inputs": { "type": "string" }
+          }
+        },
+        "execution": {
+          "type": "object",
+          "properties": {
+            "details": { "type": "string" },
+            "date": { "type": "string", "format": "date" }
+          }
+        },
+        "controls": {
+          "type": "object",
+          "properties": {
+            "review": { "type": "string" },
+            "verification": { "type": "string" }
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "properties": {
+            "results": { "type": "string" }
+          }
+        },
+        "validation": {
+          "type": "object",
+          "properties": {
+            "check": { "type": "string" }
+          }
+        },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "title", "source", "currentStep", "status", "createdBy"]
+    },
+    "Revision": {
+      "title": "Project Revision",
+      "description": "Stores revision history for a project.",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "comment": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["projectId", "userId", "comment", "timestamp"]
+    },
+    "Media": {
+      "title": "Project Media",
+      "description": "Stores media files for a project.",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "step": { "type": "integer" },
+        "url": { "type": "string" },
+        "type": { "type": "string", "enum": ["image", "video", "audio"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["projectId", "step", "url", "type", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Collection of user profiles."
+    },
+    "/projects/{projectId}": {
+      "schema": "DDProject",
+      "description": "Collection of Design and Development projects."
+    },
+    "/projects/{projectId}/revisions/{revisionId}": {
+      "schema": "Revision",
+      "description": "Collection of revisions for a project."
+    },
+    "/projects/{projectId}/media/{mediaId}": {
+      "schema": "Media",
+      "description": "Collection of media files for a project."
+    }
+  }
+}

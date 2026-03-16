@@ -1,0 +1,141 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required, email format)
+    //   - displayName: string
+    //   - role: string (required, ['admin', 'auditor', 'viewer'])
+    //   - createdAt: timestamp
+    //
+    // Collection: projects
+    // Document ID: {projectId}
+    // Fields:
+    //   - code: string (required, e.g., DD0001)
+    //   - title: string (required)
+    //   - description: string
+    //   - source: string (required, ['COMMERCIAL', 'PRODUCTION', 'COMPLAINT'])
+    //   - currentStep: int (required, 1-7)
+    //   - status: string (required, ['ACTIVE', 'APPROVED', 'REJECTED'])
+    //   - planning: map
+    //   - execution: map
+    //   - controls: map
+    //   - outputs: map
+    //   - validation: map
+    //   - createdBy: string (required)
+    //   - createdAt: timestamp
+    //   - updatedAt: timestamp
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isBootstrapAdmin() {
+      return isAuthenticated() &&
+             request.auth.token.email == "daniel.gandolfo@gmail.com" &&
+             request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin() || 
+             (isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+
+    function isAuditor() {
+      return isAdmin() || 
+             (isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'auditor');
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role']) &&
+             data.uid is string &&
+             data.email is string &&
+             data.role in ['admin', 'auditor', 'viewer'];
+    }
+
+    function isValidProjectCreate(data) {
+      return data.keys().hasAll(['code', 'title', 'source', 'currentStep', 'status', 'createdBy']) &&
+             data.code is string && data.code.size() > 0 && data.code.size() < 20 &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.source in ['COMMERCIAL', 'PRODUCTION', 'RECLAMO', 'DESIGN_DEVELOPMENT'] &&
+             data.currentStep is number && data.currentStep >= 1 && data.currentStep <= 8 &&
+             data.status in ['ACTIVE', 'APPROVED', 'REJECTED', 'EN_REVISION'] &&
+             data.createdBy is string;
+    }
+
+    function isValidProjectUpdate(data) {
+      return (data.code is string ? (data.code.size() > 0 && data.code.size() < 20) : true) &&
+             (data.title is string ? (data.title.size() > 0 && data.title.size() < 200) : true) &&
+             (data.source is string ? (data.source in ['COMMERCIAL', 'PRODUCTION', 'RECLAMO', 'DESIGN_DEVELOPMENT']) : true) &&
+             (data.currentStep is number ? (data.currentStep >= 1 && data.currentStep <= 8) : true) &&
+             (data.status is string ? (data.status in ['ACTIVE', 'APPROVED', 'REJECTED', 'EN_REVISION']) : true) &&
+             (data.createdBy is string ? true : true);
+    }
+
+    function isValidRevision(data) {
+      return data.keys().hasAll(['projectId', 'userId', 'comment', 'timestamp']) &&
+             data.projectId is string &&
+             data.userId is string &&
+             data.comment is string && data.comment.size() > 0 && data.comment.size() < 1000 &&
+             data.timestamp is timestamp;
+    }
+
+    function isValidMedia(data) {
+      return data.keys().hasAll(['projectId', 'step', 'url', 'type', 'createdAt', 'name']) &&
+             data.projectId is string &&
+             data.step is number && data.step >= 1 && data.step <= 8 &&
+             data.url is string && data.url.size() > 0 && data.url.size() < 2000 &&
+             data.type in ['image', 'video', 'audio', 'document'] &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && 
+                    (request.resource.data.role == 'viewer' || (isBootstrapAdmin() && request.resource.data.role == 'admin'));
+      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data) && 
+                    (isAdmin() || request.resource.data.role == resource.data.role);
+    }
+
+    match /projects/{projectId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuditor() && isValidProjectCreate(request.resource.data);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+
+      match /revisions/{revisionId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && isValidRevision(request.resource.data);
+      }
+
+      match /media/{mediaId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && isValidMedia(request.resource.data);
+        allow delete: if isAdmin();
+      }
+    }
+  }
+}
