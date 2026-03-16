@@ -1067,11 +1067,12 @@ export default function App() {
                                 </span>
                               </button>
                             ))}
-                            <div className="absolute left-0 top-5 -z-0 h-0.5 w-full bg-zinc-100" />
-                            <div 
-                              className="absolute left-0 top-5 -z-0 h-0.5 bg-zinc-900 transition-all duration-500" 
-                              style={{ width: `${((selectedProject.currentStep - 1) / 4) * 100}%` }}
-                            />
+                            <div className="absolute left-5 right-5 top-5 -z-0 h-0.5 bg-zinc-100">
+                              <div 
+                                className="h-full bg-zinc-900 transition-all duration-500" 
+                                style={{ width: `${((Math.min(selectedProject.currentStep, 5) - 1) / 4) * 100}%` }}
+                              />
+                            </div>
                           </div>
                           
                           {/* Step Inspection Panel */}
