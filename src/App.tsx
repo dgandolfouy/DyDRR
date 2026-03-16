@@ -521,11 +521,6 @@ export default function App() {
     doc.setTextColor(24, 24, 27);
     doc.text('DISEÑO & DESARROLLO', 62, 18);
     
-    const involvedNames = Array.from(new Set(project.history.map(h => h.userName))).join(', ');
-    doc.setFontSize(7);
-    doc.setTextColor(113, 113, 122);
-    doc.text(`Involucrados: ${involvedNames}`, 62, 23);
-    
     // Header
     doc.setTextColor(24, 24, 27);
     doc.setFontSize(20);
@@ -580,6 +575,18 @@ export default function App() {
       doc.setFontSize(10);
       doc.setTextColor(113, 113, 122);
       doc.text('No se registraron archivos adjuntos.', 25, currentY);
+    }
+
+    // Footer - Involucrados on every page
+    const pageHeight = doc.internal.pageSize.height || doc.internal.pageSize.getHeight();
+    const involvedNames = Array.from(new Set(project.history.map(h => h.userName))).join(', ');
+    const pageCount = (doc as any).internal.getNumberOfPages();
+    
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(7);
+      doc.setTextColor(113, 113, 122);
+      doc.text(`Involucrados: ${involvedNames}`, 20, pageHeight - 10);
     }
 
     doc.save(`${project.code}_Reporte_RR.pdf`);
