@@ -144,6 +144,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'projects' | 'reports'>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [inspectedStep, setInspectedStep] = useState<number | null>(null);
   const [filterStep, setFilterStep] = useState<number | 'ALL'>('ALL');
   const [selectedProject, setSelectedProject] = useState<DDProject | null>(null);
   const [revisionComment, setRevisionComment] = useState('');
@@ -213,8 +214,10 @@ export default function App() {
     if (!selectedProject) {
       setRevisions([]);
       setMedia([]);
+      setInspectedStep(null);
       return;
     }
+    setInspectedStep(null); // Also reset when switching projects
 
     const revisionsQuery = query(collection(db, 'projects', selectedProject.id, 'revisions'), orderBy('timestamp', 'desc'));
     const mediaQuery = query(collection(db, 'projects', selectedProject.id, 'media'), orderBy('createdAt', 'desc'));
@@ -471,31 +474,78 @@ export default function App() {
   const exportToPDF = (project: DDProject) => {
     const doc = new jsPDF();
     
-    // Header
-    doc.setFontSize(20);
-    doc.text('Informe de Diseño y Desarrollo', 20, 20);
+    // RR Logo (Simplified representation for PDF)
+    doc.setFillColor(239, 125, 0); // Orange #ef7d00
+    doc.circle(25, 20, 10, 'F');
+    doc.setTextColor(255, 255, 255);
     doc.setFontSize(10);
-    doc.text('RR', 180, 20); // Placeholder for logo
+    doc.setFont('helvetica', 'bold');
+    doc.text('RR', 21, 22);
+    
+    doc.setTextColor(24, 24, 27); // Zinc-900
+    doc.setFontSize(14);
+    doc.text('Etiquetas', 38, 18);
+    doc.setFontSize(8);
+    doc.setTextColor(113, 113, 122); // Zinc-500
+    doc.text('DISEÑO & DESARROLLO', 38, 23);
+    
+    // Header
+    doc.setTextColor(24, 24, 27);
+    doc.setFontSize(20);
+    doc.text('Informe de Proyecto', 20, 45);
+    
+    doc.setFontSize(10);
+    doc.setTextColor(113, 113, 122);
+    doc.text(`Generado el: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 20, 52);
+    
     doc.setFontSize(12);
-    doc.text(`Código: ${project.code}`, 20, 30);
-    doc.text(`Título: ${project.title}`, 20, 40);
-    doc.text(`Estado: ${getStatusLabel(project.status)}`, 20, 50);
-    doc.text(`Fecha: ${format(new Date(project.createdAt), 'dd/MM/yyyy')}`, 20, 60);
+    doc.setTextColor(24, 24, 27);
+    doc.text(`Código: ${project.code}`, 20, 65);
+    doc.text(`Título: ${project.title}`, 20, 72);
+    doc.text(`Estado: ${getStatusLabel(project.status)}`, 20, 79);
+    doc.text(`Fecha Creación: ${format(new Date(project.createdAt), 'dd/MM/yyyy')}`, 20, 86);
 
     // Table
     autoTable(doc, {
-      startY: 70,
+      startY: 95,
       head: [['Etapa', 'Detalles']],
       body: [
-        ['Planificación', `Responsable: ${project.planning.responsible}\nInicio: ${project.planning.startDate}`],
-        ['Ejecución', project.execution.details || 'Pendiente'],
-        ['Controles', `Revisión: ${project.controls.review}\nVerificación: ${project.controls.verification}`],
-        ['Salidas', project.outputs.results || 'Pendiente'],
-        ['Validación', project.validation.check || 'Pendiente'],
+        ['1. Planificación', `Responsable: ${project.planning.responsible}\nInicio: ${project.planning.startDate}\nEntradas: ${project.planning.inputs}`],
+        ['2. Ejecución', project.execution.details || 'Pendiente'],
+        ['3. Controles', `Revisión: ${project.controls.review}\nVerificación: ${project.controls.verification}`],
+        ['4. Salidas', project.outputs.results || 'Pendiente'],
+        ['5. Validación', project.validation.check || 'Pendiente'],
       ],
+      headStyles: { fillColor: [24, 24, 27] },
     });
 
-    doc.save(`${project.code}_Report.pdf`);
+    // Evidence Section
+    let currentY = (doc as any).lastAutoTable.finalY + 20;
+    doc.setFontSize(16);
+    doc.text('Evidencias y Adjuntos', 20, currentY);
+    currentY += 10;
+
+    const projectMedia = media.filter(m => m.projectId === project.id);
+    if (projectMedia.length > 0) {
+      projectMedia.forEach((m, index) => {
+        if (currentY > 250) {
+          doc.addPage();
+          currentY = 20;
+        }
+        doc.setFontSize(10);
+        doc.text(`${index + 1}. [Etapa ${m.step}] ${m.name}`, 25, currentY);
+        
+        // If it's an image, we could try to add it, but since we don't have base64 easily here without async, 
+        // we'll at least list them clearly as evidence.
+        currentY += 8;
+      });
+    } else {
+      doc.setFontSize(10);
+      doc.setTextColor(113, 113, 122);
+      doc.text('No se registraron archivos adjuntos.', 25, currentY);
+    }
+
+    doc.save(`${project.code}_Reporte_RR.pdf`);
   };
 
   const MediaSection = ({ step }: { step: number }) => {
@@ -988,28 +1038,108 @@ export default function App() {
                         <div className="mb-12">
                           <div className="relative flex justify-between">
                             {[1, 2, 3, 4, 5].map((step) => (
-                              <div key={step} className="relative z-10 flex flex-col items-center gap-2">
+                              <button 
+                                key={step} 
+                                onClick={() => setInspectedStep(inspectedStep === step ? null : step)}
+                                className={cn(
+                                  "relative z-10 flex flex-col items-center gap-2 transition-transform hover:scale-110",
+                                  inspectedStep === step && "scale-110"
+                                )}
+                              >
                                 <div className={cn(
-                                  "flex h-8 w-8 items-center justify-center rounded-full border-2 transition-colors",
-                                  selectedProject.currentStep >= step ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white text-zinc-400"
+                                  "flex h-10 w-10 items-center justify-center rounded-full border-2 transition-all shadow-sm",
+                                  selectedProject.currentStep >= step 
+                                    ? "border-zinc-900 bg-zinc-900 text-white" 
+                                    : "border-zinc-200 bg-white text-zinc-400",
+                                  inspectedStep === step && "ring-4 ring-orange-500/20 border-orange-500"
                                 )}>
-                                  {selectedProject.currentStep > step ? <CheckCircle2 size={16} /> : step}
+                                  {selectedProject.currentStep > step ? <CheckCircle2 size={20} /> : <span className="text-sm font-bold">{step}</span>}
                                 </div>
-                                <span className="text-[10px] font-medium uppercase tracking-tighter">
+                                <span className={cn(
+                                  "text-[10px] font-bold uppercase tracking-tighter transition-colors",
+                                  inspectedStep === step ? "text-orange-600" : "text-zinc-500"
+                                )}>
                                   {step === 1 && 'Planificación'}
                                   {step === 2 && 'Ejecución'}
                                   {step === 3 && 'Controles'}
                                   {step === 4 && 'Salidas'}
                                   {step === 5 && 'Validación'}
                                 </span>
-                              </div>
+                              </button>
                             ))}
-                            <div className="absolute left-0 top-4 -z-0 h-0.5 w-full bg-zinc-100" />
+                            <div className="absolute left-0 top-5 -z-0 h-0.5 w-full bg-zinc-100" />
                             <div 
-                              className="absolute left-0 top-4 -z-0 h-0.5 bg-zinc-900 transition-all duration-500" 
+                              className="absolute left-0 top-5 -z-0 h-0.5 bg-zinc-900 transition-all duration-500" 
                               style={{ width: `${((selectedProject.currentStep - 1) / 4) * 100}%` }}
                             />
                           </div>
+                          
+                          {/* Step Inspection Panel */}
+                          <AnimatePresence>
+                            {inspectedStep && (
+                              <motion.div 
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className="mt-8 overflow-hidden"
+                              >
+                                <Card className="bg-zinc-50 border-zinc-200 p-6">
+                                  <div className="flex items-center justify-between mb-6">
+                                    <div className="flex items-center gap-3">
+                                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500 text-white text-sm font-bold">
+                                        {inspectedStep}
+                                      </div>
+                                      <h4 className="font-bold text-zinc-900">
+                                        Detalles de Etapa: {
+                                          inspectedStep === 1 ? 'Planificación' :
+                                          inspectedStep === 2 ? 'Ejecución' :
+                                          inspectedStep === 3 ? 'Controles' :
+                                          inspectedStep === 4 ? 'Salidas' : 'Validación'
+                                        }
+                                      </h4>
+                                    </div>
+                                    <Button variant="ghost" size="sm" onClick={() => setInspectedStep(null)}>Cerrar</Button>
+                                  </div>
+                                  
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    <div className="space-y-4">
+                                      <h5 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Archivos de esta etapa</h5>
+                                      <div className="grid grid-cols-2 gap-3">
+                                        {media.filter(m => m.step === inspectedStep && m.projectId === selectedProject.id).map(m => (
+                                          <div key={m.id} className="flex items-center gap-2 p-2 rounded border border-zinc-200 bg-white shadow-sm">
+                                            <FileText size={14} className="text-zinc-400" />
+                                            <span className="text-[10px] truncate flex-1">{m.name}</span>
+                                            <a href={m.url} target="_blank" rel="noreferrer" className="text-zinc-400 hover:text-zinc-900">
+                                              <Download size={12} />
+                                            </a>
+                                          </div>
+                                        ))}
+                                        {media.filter(m => m.step === inspectedStep && m.projectId === selectedProject.id).length === 0 && (
+                                          <p className="text-xs text-zinc-400 italic">No hay archivos.</p>
+                                        )}
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="space-y-4">
+                                      <h5 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Comentarios de esta etapa</h5>
+                                      <div className="space-y-3 max-h-[200px] overflow-y-auto pr-2">
+                                        {selectedProject.history?.filter(h => h.newStep === inspectedStep || h.previousStep === inspectedStep).map(h => (
+                                          <div key={h.id} className="text-[11px] border-l-2 border-zinc-200 pl-3 py-1">
+                                            <p className="font-bold text-zinc-700">{h.action}</p>
+                                            {h.comment && <p className="text-zinc-600 italic">"{h.comment}"</p>}
+                                            <p className="text-[9px] text-zinc-400 mt-1">{format(new Date(h.date), 'dd/MM HH:mm')}</p>
+                                          </div>
+                                        ))}
+                                        {(!selectedProject.history || selectedProject.history.filter(h => h.newStep === inspectedStep || h.previousStep === inspectedStep).length === 0) && (
+                                          <p className="text-xs text-zinc-400 italic">Sin comentarios.</p>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </Card>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </div>
 
                         {/* Step Content */}
