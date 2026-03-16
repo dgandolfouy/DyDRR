@@ -60,6 +60,7 @@ import { twMerge } from 'tailwind-merge';
 import { auth, db, signIn, logOut } from './firebase';
 import { DDProject, UserProfile, ProjectSource, ProjectStatus, ProjectHistory } from './types';
 import { Logo } from './components/Logo';
+import { LOGO_PATHS } from './components/LogoPaths';
 import { Button } from './components/Button';
 import { Card, Badge } from './components/UI';
 import { FileUpload } from './components/FileUpload';
@@ -471,23 +472,59 @@ export default function App() {
     }
   };
 
-  const exportToPDF = (project: DDProject) => {
+  const exportToPDF = async (project: DDProject) => {
     const doc = new jsPDF();
     
-    // RR Logo (Simplified representation for PDF)
-    doc.setFillColor(239, 125, 0); // Orange #ef7d00
-    doc.circle(25, 20, 10, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.text('RR', 21, 22);
+    // RR Logo (Full SVG representation for PDF)
+    const svgString = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 445.41 237.71">
+        <g fill="#18181b">
+          ${LOGO_PATHS.text.map(d => `<path d="${d}"/>`).join('')}
+        </g>
+        <g>
+          <path fill="#ef7d00" d="${LOGO_PATHS.ball}"/>
+          <path fill="#18181b" fill-rule="evenodd" d="${LOGO_PATHS.rr}"/>
+          <path fill="#ec6608" d="${LOGO_PATHS.trademark}"/>
+        </g>
+      </svg>
+    `;
+
+    // Convert SVG to PNG using Canvas to avoid jsPDF SVG support issues
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
     
-    doc.setTextColor(24, 24, 27); // Zinc-900
-    doc.setFontSize(14);
-    doc.text('Etiquetas', 38, 18);
-    doc.setFontSize(8);
-    doc.setTextColor(113, 113, 122); // Zinc-500
-    doc.text('DISEÑO & DESARROLLO', 38, 23);
+    if (ctx) {
+      const img = new Image();
+      const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(svgBlob);
+      
+      await new Promise((resolve, reject) => {
+        img.onload = () => {
+          // Use higher resolution for better quality
+          canvas.width = 890; // 445 * 2
+          canvas.height = 474; // 237 * 2
+          ctx.fillStyle = 'white';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          URL.revokeObjectURL(url);
+          resolve(null);
+        };
+        img.onerror = reject;
+        img.src = url;
+      });
+
+      const logoDataUrl = canvas.toDataURL('image/png');
+      doc.addImage(logoDataUrl, 'PNG', 20, 10, 40, 21.3); // Aspect ratio 445/237 ≈ 1.87
+    }
+    
+    doc.setFontSize(10);
+    doc.setTextColor(24, 24, 27);
+    doc.text('DISEÑO & DESARROLLO', 62, 18);
+    
+    const involvedNames = Array.from(new Set(project.history.map(h => h.userName))).join(', ');
+    doc.setFontSize(7);
+    doc.setTextColor(113, 113, 122);
+    doc.text(`Involucrados: ${involvedNames}`, 62, 23);
     
     // Header
     doc.setTextColor(24, 24, 27);
@@ -1067,11 +1104,13 @@ export default function App() {
                                 </span>
                               </button>
                             ))}
-                            <div className="absolute left-5 right-5 top-5 -z-0 h-0.5 bg-zinc-100">
-                              <div 
-                                className="h-full bg-zinc-900 transition-all duration-500" 
-                                style={{ width: `${((Math.min(selectedProject.currentStep, 5) - 1) / 4) * 100}%` }}
-                              />
+                            <div className="absolute inset-x-0 top-5 -z-0 px-5">
+                              <div className="h-0.5 w-full bg-zinc-100">
+                                <div 
+                                  className="h-full bg-zinc-900 transition-all duration-500" 
+                                  style={{ width: `${((Math.min(selectedProject.currentStep, 5) - 1) / 4) * 100}%` }}
+                                />
+                              </div>
                             </div>
                           </div>
                           
