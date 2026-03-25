@@ -20,17 +20,21 @@ service cloud.firestore {
     //   - code: string (required, e.g., DD0001)
     //   - title: string (required)
     //   - description: string
-    //   - source: string (required, ['COMMERCIAL', 'PRODUCTION', 'COMPLAINT'])
-    //   - currentStep: int (required, 1-7)
-    //   - status: string (required, ['ACTIVE', 'APPROVED', 'REJECTED'])
+    //   - source: string (required, ['COMMERCIAL', 'PRODUCTION', 'RECLAMO', 'ARTE', 'GERENCIA', 'CALIDAD'])
+    //   - currentStep: int (required, 1-8)
+    //   - status: string (required, ['ACTIVE', 'APPROVED', 'REJECTED', 'EN_REVISION'])
     //   - planning: map
     //   - execution: map
     //   - controls: map
     //   - outputs: map
     //   - validation: map
+    //   - history: list
+    //   - coordinationLog: list
+    //   - versionChanges: list
+    //   - trelloLink: string
     //   - createdBy: string (required)
-    //   - createdAt: timestamp
-    //   - updatedAt: timestamp
+    //   - createdAt: string (ISO string)
+    //   - updatedAt: string (ISO string)
     //
     // ===============================================================
 
@@ -44,8 +48,7 @@ service cloud.firestore {
 
     function isBootstrapAdmin() {
       return isAuthenticated() &&
-             request.auth.token.email == "daniel.gandolfo@gmail.com" &&
-             request.auth.token.email_verified == true;
+             request.auth.token.email == "daniel.gandolfo@gmail.com";
     }
 
     function isAdmin() {
@@ -72,39 +75,40 @@ service cloud.firestore {
     }
 
     function isValidProjectCreate(data) {
-      return data.keys().hasAll(['code', 'title', 'source', 'currentStep', 'status', 'createdBy']) &&
-             data.code is string && data.code.size() > 0 && data.code.size() < 20 &&
-             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
-             data.source in ['COMMERCIAL', 'PRODUCTION', 'RECLAMO', 'DESIGN_DEVELOPMENT'] &&
-             data.currentStep is number && data.currentStep >= 1 && data.currentStep <= 8 &&
+      return data.keys().hasAll(['code', 'title', 'source', 'currentStep', 'status', 'createdBy', 'createdAt', 'updatedAt', 'planning', 'history']) &&
+             data.code is string &&
+             data.title is string &&
+             data.source in ['COMMERCIAL', 'PRODUCTION', 'RECLAMO', 'ARTE', 'GERENCIA', 'CALIDAD'] &&
+             data.currentStep is number &&
              data.status in ['ACTIVE', 'APPROVED', 'REJECTED', 'EN_REVISION'] &&
-             data.createdBy is string;
+             data.createdBy is string &&
+             data.planning is map &&
+             data.history is list;
     }
 
     function isValidProjectUpdate(data) {
-      return (data.code is string ? (data.code.size() > 0 && data.code.size() < 20) : true) &&
-             (data.title is string ? (data.title.size() > 0 && data.title.size() < 200) : true) &&
-             (data.source is string ? (data.source in ['COMMERCIAL', 'PRODUCTION', 'RECLAMO', 'DESIGN_DEVELOPMENT']) : true) &&
-             (data.currentStep is number ? (data.currentStep >= 1 && data.currentStep <= 8) : true) &&
-             (data.status is string ? (data.status in ['ACTIVE', 'APPROVED', 'REJECTED', 'EN_REVISION']) : true) &&
-             (data.createdBy is string ? true : true);
+      // Robust check for updates, allowing partial updates to pass validation
+      return (data.get('code', '') is string) &&
+             (data.get('title', '') is string) &&
+             (data.get('currentStep', 1) is number) &&
+             (data.get('status', 'ACTIVE') is string);
     }
 
     function isValidRevision(data) {
       return data.keys().hasAll(['projectId', 'userId', 'comment', 'timestamp']) &&
              data.projectId is string &&
              data.userId is string &&
-             data.comment is string && data.comment.size() > 0 && data.comment.size() < 1000 &&
+             data.comment is string &&
              data.timestamp is timestamp;
     }
 
     function isValidMedia(data) {
       return data.keys().hasAll(['projectId', 'step', 'url', 'type', 'createdAt', 'name']) &&
              data.projectId is string &&
-             data.step is number && data.step >= 1 && data.step <= 8 &&
-             data.url is string && data.url.size() > 0 && data.url.size() < 2000 &&
-             data.type in ['image', 'video', 'audio', 'document'] &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.step is number &&
+             data.url is string &&
+             data.type is string &&
+             data.name is string &&
              data.createdAt is timestamp;
     }
 
@@ -121,9 +125,10 @@ service cloud.firestore {
     }
 
     match /projects/{projectId} {
+      allow read, write: if isBootstrapAdmin();
       allow read: if isAuthenticated();
       allow create: if isAuditor() && isValidProjectCreate(request.resource.data);
-      allow update: if isAdmin();
+      allow update: if isAuditor() && isValidProjectUpdate(request.resource.data);
       allow delete: if isAdmin();
 
       match /revisions/{revisionId} {

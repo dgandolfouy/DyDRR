@@ -8,7 +8,7 @@ export interface UserProfile {
   createdAt: string;
 }
 
-export type ProjectSource = 'COMMERCIAL' | 'PRODUCTION' | 'RECLAMO' | 'DESIGN_DEVELOPMENT';
+export type ProjectSource = 'CALIDAD' | 'GERENCIA' | 'ARTE' | 'COMMERCIAL' | 'PRODUCTION' | 'RECLAMO';
 export type ProjectStatus = 'ACTIVE' | 'EN_REVISION' | 'APPROVED' | 'REJECTED';
 
 export interface ProjectHistory {
@@ -22,36 +22,68 @@ export interface ProjectHistory {
   newStep: number;
 }
 
+export interface CoordinationEntry {
+  id: string;
+  date: string;
+  from: string;
+  to: string;
+  agreement: string;
+  userId: string;
+  userName: string;
+}
+
+export interface VersionChange {
+  id: string;
+  date: string;
+  description: string;
+  requestedBy: string;
+  impact: string;
+  userId: string;
+  userName: string;
+}
+
 export interface DDProject {
   id: string;
   code: string;
   title: string;
   description: string;
   source: ProjectSource;
+  trelloLink?: string | null;
   complaintNumber?: string | null;
   currentStep: number;
   status: ProjectStatus;
   history: ProjectHistory[];
+  coordinationLog?: CoordinationEntry[];
+  versionChanges?: VersionChange[];
   planning: {
     responsible: string;
     startDate: string;
-    inputs: string;
+    functionalRequirements: string;
+    legalRequirements: string;
+    previousDesigns: string;
+    risksAndFailures: string;
+    criticalResources: string;
   };
   execution: {
     details: string;
     date: string;
+    initialValidationResult: string;
+    initialValidationEvidence: string; // URL or reference
   };
   controls: {
-    review: string;
-    verification: string;
+    reviewMinutes: string;
+    verificationConfirmation: boolean;
   };
   outputs: {
     results: string;
   };
   validation: {
-    check: string;
+    finalValidation: string;
+    contrastWithInitial: string;
   };
   createdBy: string;
+  creatorName: string;
+  creatorEmail: string;
   createdAt: string;
   updatedAt: string;
 }

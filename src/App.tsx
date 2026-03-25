@@ -35,7 +35,8 @@ import {
   BarChart3,
   AlertCircle,
   Menu,
-  X
+  X,
+  Users
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Fuse from 'fuse.js';
@@ -52,17 +53,18 @@ import {
   ResponsiveContainer, 
   PieChart, 
   Pie, 
-  Cell 
+  Cell,
+  Legend 
 } from 'recharts';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
 import { auth, db, signIn, logOut } from './firebase';
-import { DDProject, UserProfile, ProjectSource, ProjectStatus, ProjectHistory } from './types';
+import { DDProject, UserProfile, ProjectSource, ProjectStatus, ProjectHistory, CoordinationEntry, VersionChange } from './types';
 import { Logo } from './components/Logo';
 import { LOGO_PATHS } from './components/LogoPaths';
 import { Button } from './components/Button';
-import { Card, Badge } from './components/UI';
+import { Card, Badge, ConfirmationModal } from './components/UI';
 import { FileUpload } from './components/FileUpload';
 
 // Utility for tailwind classes
@@ -152,8 +154,34 @@ export default function App() {
   const [revisions, setRevisions] = useState<any[]>([]);
   const [media, setMedia] = useState<any[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isChangeModalOpen, setIsChangeModalOpen] = useState(false);
   const [newProjectSource, setNewProjectSource] = useState<ProjectSource>('COMMERCIAL');
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<DDProject | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  // Update selectedProject when projects change
+  useEffect(() => {
+    if (selectedProject) {
+      const updated = projects.find(p => p.id === selectedProject.id);
+      if (updated) {
+        setSelectedProject(updated);
+      }
+    }
+  }, [projects]);
+
+  const handleDeleteProject = async () => {
+    if (!projectToDelete) return;
+    try {
+      await deleteDoc(doc(db, 'projects', projectToDelete.id));
+      setIsDeleteModalOpen(false);
+      setProjectToDelete(null);
+      setSelectedProject(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `projects/${projectToDelete.id}`);
+    }
+  };
 
   // Auth Listener
   useEffect(() => {
@@ -210,6 +238,16 @@ export default function App() {
     return unsubscribe;
   }, [user, isAuthReady]);
 
+  // Sync selectedProject with projects array
+  useEffect(() => {
+    if (selectedProject) {
+      const updated = projects.find(p => p.id === selectedProject.id);
+      if (updated && updated !== selectedProject) {
+        setSelectedProject(updated);
+      }
+    }
+  }, [projects, selectedProject]);
+
   // Revisions and Media Listener
   useEffect(() => {
     if (!selectedProject) {
@@ -241,20 +279,6 @@ export default function App() {
     };
   }, [selectedProject]);
 
-  // Test connection
-  useEffect(() => {
-    async function testConnection() {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error) {
-        if(error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration.");
-        }
-      }
-    }
-    testConnection();
-  }, []);
-
   const filteredProjects = useMemo(() => {
     let filtered = projects;
     if (searchQuery) {
@@ -276,13 +300,15 @@ export default function App() {
     const total = projects.length;
     const aprobado = projects.filter(p => p.status === 'APPROVED').length;
     const rechazado = projects.filter(p => p.status === 'REJECTED').length;
-    const activo = projects.filter(p => p.status === 'ACTIVO').length;
+    const activo = projects.filter(p => p.status === 'ACTIVE').length;
 
     const sourceData = [
-      { name: 'Comercial', value: projects.filter(p => p.source === 'COMMERCIAL').length },
-      { name: 'Producción', value: projects.filter(p => p.source === 'PRODUCTION').length },
-      { name: 'Reclamos', value: projects.filter(p => p.source === 'RECLAMO').length },
-      { name: 'Diseño & Desarrollo', value: projects.filter(p => p.source === 'DESIGN_DEVELOPMENT').length },
+      { name: 'Comercial', value: projects.filter(p => p.source === 'COMMERCIAL').length, color: '#18181b' },
+      { name: 'Producción', value: projects.filter(p => p.source === 'PRODUCTION').length, color: '#3b82f6' },
+      { name: 'Reclamos', value: projects.filter(p => p.source === 'RECLAMO').length, color: '#ef4444' },
+      { name: 'Calidad', value: projects.filter(p => p.source === 'CALIDAD').length, color: '#10b981' },
+      { name: 'Gerencia', value: projects.filter(p => p.source === 'GERENCIA').length, color: '#f59e0b' },
+      { name: 'Arte', value: projects.filter(p => p.source === 'ARTE').length, color: '#8b5cf6' },
     ];
 
     const stepData = [
@@ -291,19 +317,89 @@ export default function App() {
       { name: 'Controles', count: projects.filter(p => p.currentStep === 3).length },
       { name: 'Salidas', count: projects.filter(p => p.currentStep === 4).length },
       { name: 'Validación', count: projects.filter(p => p.currentStep === 5).length },
-      { name: 'Aprobado', count: projects.filter(p => p.currentStep === 6).length },
-      { name: 'Rechazado', count: projects.filter(p => p.currentStep === 7).length },
+      { name: 'Aprobado', count: projects.filter(p => p.status === 'APPROVED').length },
     ];
 
     return { total, approved: aprobado, rejected: rechazado, active: activo, sourceData, stepData };
   }, [projects]);
+
+  const handleChangeRequest = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!selectedProject) return;
+
+    const formData = new FormData(e.currentTarget);
+    const description = formData.get('description') as string;
+    const impact = formData.get('impact') as string;
+    const requestedBy = formData.get('requestedBy') as string;
+
+    const newChange: VersionChange = {
+      id: Date.now().toString(),
+      date: new Date().toISOString(),
+      description,
+      requestedBy,
+      impact,
+      userId: auth.currentUser?.uid || '',
+      userName: userProfile?.displayName || 'Usuario',
+    };
+
+    const updatedChanges = [...(selectedProject.versionChanges || []), newChange];
+    
+    try {
+      await updateDoc(doc(db, 'projects', selectedProject.id), {
+        versionChanges: updatedChanges,
+        updatedAt: new Date().toISOString()
+      });
+      
+      await addCommentToHistory(selectedProject.id, `Solicitud de cambio: ${description}`);
+      setIsChangeModalOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `projects/${selectedProject.id}`);
+    }
+  };
+
+  const addCoordinationEntry = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!selectedProject) return;
+
+    const formData = new FormData(e.currentTarget);
+    const from = formData.get('from') as string;
+    const to = formData.get('to') as string;
+    const agreement = formData.get('agreement') as string;
+
+    const newEntry: CoordinationEntry = {
+      id: Date.now().toString(),
+      date: new Date().toISOString(),
+      from,
+      to,
+      agreement,
+      userId: auth.currentUser?.uid || '',
+      userName: userProfile?.displayName || 'Usuario',
+    };
+
+    const updatedLog = [...(selectedProject.coordinationLog || []), newEntry];
+    
+    try {
+      await updateDoc(doc(db, 'projects', selectedProject.id), {
+        coordinationLog: updatedLog,
+        updatedAt: new Date().toISOString()
+      });
+      
+      e.currentTarget.reset();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `projects/${selectedProject.id}`);
+    }
+  };
 
   const handleCreateProject = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!userProfile || userProfile.role === 'viewer') return;
 
     const formData = new FormData(e.currentTarget);
-    const nextCode = `DD${String(projects.length + 1).padStart(4, '0')}`;
+    
+    // Calculate next code based on existing projects
+    const lastProject = [...projects].sort((a, b) => b.code.localeCompare(a.code))[0];
+    const lastNum = lastProject ? parseInt(lastProject.code.replace('DD', '')) : 0;
+    const nextCode = `DD${String(lastNum + 1).padStart(4, '0')}`;
     
     const newProject: Omit<DDProject, 'id'> = {
       code: nextCode,
@@ -311,98 +407,132 @@ export default function App() {
       description: formData.get('description') as string,
       source: formData.get('source') as ProjectSource,
       complaintNumber: formData.get('complaintNumber') as string || null,
+      trelloLink: formData.get('trelloLink') as string || '',
       currentStep: 1,
       status: 'ACTIVE',
-      history: [],
+      history: [{
+        id: crypto.randomUUID(),
+        userId: userProfile.uid,
+        userName: userProfile.displayName,
+        date: new Date().toISOString(),
+        action: 'Creación de proyecto',
+        comment: 'Proyecto iniciado para cumplimiento ISO 8.3',
+        previousStep: 0,
+        newStep: 1
+      }],
       planning: {
         responsible: formData.get('responsible') as string,
         startDate: new Date().toISOString().split('T')[0],
-        inputs: '',
+        functionalRequirements: '',
+        legalRequirements: '',
+        previousDesigns: '',
+        risksAndFailures: '',
+        criticalResources: '',
       },
-      execution: { details: '', date: '' },
-      controls: { review: '', verification: '' },
+      coordinationLog: [],
+      versionChanges: [],
+      execution: { details: '', date: '', initialValidationResult: '', initialValidationEvidence: '' },
+      controls: { reviewMinutes: '', verificationConfirmation: false },
       outputs: { results: '' },
-      validation: { check: '' },
+      validation: { finalValidation: '', contrastWithInitial: '' },
       createdBy: userProfile.uid,
+      creatorName: userProfile.displayName,
+      creatorEmail: userProfile.email,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
     try {
-      await setDoc(doc(collection(db, 'projects')), newProject);
+      await addDoc(collection(db, 'projects'), newProject);
       setIsModalOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'projects');
     }
   };
 
+  const validateStep = (step: number, project: DDProject): { isValid: boolean; missingFields: string[] } => {
+    const missingFields: string[] = [];
+    const projectMedia = media.filter(m => m.projectId === project.id);
+
+    switch (step) {
+      case 1:
+        if (!project.planning.responsible) missingFields.push('Responsable');
+        if (!project.planning.functionalRequirements) missingFields.push('Requisitos Funcionales');
+        if (!project.planning.legalRequirements) missingFields.push('Requisitos Legales');
+        if (!project.planning.previousDesigns) missingFields.push('Diseños Previos');
+        if (!project.planning.risksAndFailures) missingFields.push('Riesgos y Fallas');
+        if (!project.planning.criticalResources) missingFields.push('Recursos Críticos');
+        if (project.source === 'ARTE' && !project.trelloLink) missingFields.push('Link a Tarjeta Trello');
+        break;
+      case 2:
+        if (!project.execution.details) missingFields.push('Detalles de Ejecución');
+        if (!project.execution.initialValidationResult) missingFields.push('Resultado Validación Inicial');
+        const step2Media = projectMedia.filter(m => m.step === 2);
+        if (step2Media.length === 0) missingFields.push('Evidencia de Validación (Archivo Adjunto)');
+        break;
+      case 3:
+        if (!project.controls.reviewMinutes) missingFields.push('Minuta de Revisión');
+        if (!project.controls.verificationConfirmation) missingFields.push('Confirmación de Verificación');
+        break;
+      case 4:
+        if (!project.outputs.results) missingFields.push('Resultados de Salida');
+        break;
+      case 5:
+        if (!project.validation.finalValidation) missingFields.push('Validación Final');
+        if (!project.validation.contrastWithInitial) missingFields.push('Contraste con Validación Inicial');
+        break;
+    }
+    return { isValid: missingFields.length === 0, missingFields };
+  };
+
   const updateProjectStep = async (projectId: string, step: number, data: any, comment: string = '', action: string = '') => {
+    setValidationError(null);
     const projectRef = doc(db, 'projects', projectId);
-    const project = selectedProject;
+    const project = projects.find(p => p.id === projectId);
     if (!project) return;
 
-    let historyUpdates = project.history || [];
-    
-    // Solo agregar al historial si hay un cambio real de etapa, estado, o un comentario/acción explícita
-    const isStepChange = project.currentStep !== step;
-    const hasComment = comment.trim() !== '';
-    const isExplicitAction = action !== '';
-    
-    // Check if there are data changes that should be logged
-    let dataChangeComment = '';
-    let dataChangeAction = '';
-    
-    if (!isStepChange && !hasComment && !isExplicitAction) {
-      if (data['planning.inputs'] !== undefined && data['planning.inputs'] !== project.planning.inputs) {
-        dataChangeAction = 'Actualización de Planificación';
-        dataChangeComment = data['planning.inputs'];
-      } else if (data['execution.details'] !== undefined && data['execution.details'] !== project.execution.details) {
-        dataChangeAction = 'Actualización de Ejecución';
-        dataChangeComment = data['execution.details'];
-      } else if (data['controls.review'] !== undefined && data['controls.review'] !== project.controls.review) {
-        dataChangeAction = 'Actualización de Revisión (Controles)';
-        dataChangeComment = data['controls.review'];
-      } else if (data['controls.verification'] !== undefined && data['controls.verification'] !== project.controls.verification) {
-        dataChangeAction = 'Actualización de Verificación (Controles)';
-        dataChangeComment = data['controls.verification'];
-      } else if (data['outputs.results'] !== undefined && data['outputs.results'] !== project.outputs.results) {
-        dataChangeAction = 'Actualización de Salidas';
-        dataChangeComment = data['outputs.results'];
-      } else if (data['validation.check'] !== undefined && data['validation.check'] !== project.validation.check) {
-        dataChangeAction = 'Actualización de Validación';
-        dataChangeComment = data['validation.check'];
-      }
+    // If moving to a higher step, validate current step
+    if (step > project.currentStep) {
+        const { isValid, missingFields } = validateStep(project.currentStep, project);
+        if (!isValid) {
+            setValidationError(`Por favor, complete los siguientes campos obligatorios: ${missingFields.join(', ')}`);
+            return;
+        }
     }
 
-    if (isStepChange || hasComment || isExplicitAction || dataChangeAction) {
-      const newHistory: ProjectHistory = {
-        id: crypto.randomUUID(),
-        userId: auth.currentUser?.uid || 'system',
-        userName: userProfile?.displayName || 'Sistema',
-        date: new Date().toISOString(),
-        action: action || dataChangeAction || (isStepChange ? 'Cambio de Etapa' : 'Actualización'),
-        comment: comment || dataChangeComment,
-        previousStep: project.currentStep,
-        newStep: step
-      };
-      historyUpdates = [...historyUpdates, newHistory];
-    }
+    const newHistoryEntry: ProjectHistory = {
+      id: crypto.randomUUID(),
+      userId: userProfile?.uid || '',
+      userName: userProfile?.displayName || 'Usuario',
+      date: new Date().toISOString(),
+      action: action || 'Actualización de datos',
+      comment: comment,
+      previousStep: project.currentStep,
+      newStep: step,
+    };
 
-    const updateData: any = {
+    const updatedData = {
+      ...project,
       currentStep: step,
+      history: [...(project.history || []), newHistoryEntry],
+      status: step === 6 ? 'APPROVED' : step === 7 ? 'REJECTED' : step === 8 ? 'EN_REVISION' : 'ACTIVE',
       updatedAt: new Date().toISOString(),
-      history: historyUpdates,
       ...data
     };
 
-    if (step === 6) updateData.status = 'APPROVED';
-    else if (step === 7) updateData.status = 'REJECTED';
-    else if (step === 8) updateData.status = 'EN_REVISION';
-    else updateData.status = 'ACTIVE';
-
     try {
-      await updateDoc(projectRef, updateData);
-      setSelectedProject(prev => prev ? { ...prev, ...updateData } : null);
+      if (Object.keys(data).length > 0) {
+        await updateDoc(projectRef, data); // Only update the changed fields in Firestore
+      }
+      if (step !== project.currentStep || action || comment) {
+        // If step changed or there's a comment/action, update the whole object to include history and status
+        await updateDoc(projectRef, {
+            currentStep: step,
+            history: updatedData.history,
+            status: updatedData.status,
+            updatedAt: updatedData.updatedAt
+        });
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `projects/${projectId}`);
     }
@@ -414,7 +544,7 @@ export default function App() {
       setSelectedProject(null);
       setIsModalOpen(false);
     } catch (error) {
-      console.error("Error deleting project:", error);
+      handleFirestoreError(error, OperationType.DELETE, `projects/${projectId}`);
     }
   };
 
@@ -528,28 +658,63 @@ export default function App() {
     
     doc.setFontSize(10);
     doc.setTextColor(113, 113, 122);
-    doc.text(`Generado el: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 20, 52);
+    doc.text(`Generado el: ${format(new Date(), 'dd/MM/yyyy HH:mm:ss')}`, 20, 52);
+    doc.text(`Creado por: ${project.creatorName || 'Usuario'} el ${format(new Date(project.createdAt), 'dd/MM/yyyy HH:mm:ss')}`, 20, 57);
     
     doc.setFontSize(12);
     doc.setTextColor(24, 24, 27);
-    doc.text(`Código: ${project.code}`, 20, 65);
-    doc.text(`Título: ${project.title}`, 20, 72);
-    doc.text(`Estado: ${getStatusLabel(project.status)}`, 20, 79);
-    doc.text(`Fecha Creación: ${format(new Date(project.createdAt), 'dd/MM/yyyy')}`, 20, 86);
+    doc.text(`Código: ${project.code}`, 20, 68);
+    doc.text(`Título: ${project.title}`, 20, 75);
+    doc.text(`Origen: ${project.source}`, 20, 82);
+    doc.text(`Estado: ${getStatusLabel(project.status)}`, 20, 89);
 
     // Table
     autoTable(doc, {
-      startY: 95,
+      startY: 100,
       head: [['Etapa', 'Detalles']],
       body: [
-        ['1. Planificación', `Responsable: ${project.planning.responsible}\nInicio: ${project.planning.startDate}\nEntradas: ${project.planning.inputs}`],
-        ['2. Ejecución', project.execution.details || 'Pendiente'],
-        ['3. Controles', `Revisión: ${project.controls.review}\nVerificación: ${project.controls.verification}`],
+        ['1. Planificación', `Responsable: ${project.planning.responsible}\nInicio: ${project.planning.startDate}\nFuncionales: ${project.planning.functionalRequirements}\nLegales: ${project.planning.legalRequirements}\nDiseños Previos: ${project.planning.previousDesigns}\nRiesgos: ${project.planning.risksAndFailures}\nRecursos: ${project.planning.criticalResources}${project.trelloLink ? `\nTrello: ${project.trelloLink}` : ''}`],
+        ['2. Ejecución', `Detalles: ${project.execution.details}\nValidación Inicial: ${project.execution.initialValidationResult}\nEvidencia: ${project.execution.initialValidationEvidence}`],
+        ['3. Controles', `Minuta de Revisión: ${project.controls.reviewMinutes}\nVerificación: ${project.controls.verificationConfirmation ? 'Confirmada' : 'Pendiente'}`],
         ['4. Salidas', project.outputs.results || 'Pendiente'],
-        ['5. Validación', project.validation.check || 'Pendiente'],
+        ['5. Validación', `Validación Final: ${project.validation.finalValidation}\nContraste: ${project.validation.contrastWithInitial}`],
       ],
       headStyles: { fillColor: [24, 24, 27] },
     });
+
+    // History Table (Traceability)
+    if (project.history && project.history.length > 0) {
+      doc.setFontSize(14);
+      doc.text('Historial de Trazabilidad (ISO 8.3)', 20, (doc as any).lastAutoTable.finalY + 15);
+      autoTable(doc, {
+        startY: (doc as any).lastAutoTable.finalY + 20,
+        head: [['Fecha y Hora', 'Usuario', 'Acción', 'Comentario']],
+        body: project.history.map(h => [format(new Date(h.date), 'dd/MM/yyyy HH:mm:ss'), h.userName, h.action, h.comment]),
+        headStyles: { fillColor: [71, 71, 74] },
+      });
+    }
+
+    // Coordination Log
+    if (project.coordinationLog && project.coordinationLog.length > 0) {
+      doc.setFontSize(14);
+      doc.text('Log de Coordinación', 20, (doc as any).lastAutoTable.finalY + 15);
+      autoTable(doc, {
+        startY: (doc as any).lastAutoTable.finalY + 20,
+        head: [['Fecha', 'De', 'A', 'Acuerdo']],
+        body: project.coordinationLog.map(e => [format(new Date(e.date), 'dd/MM/yyyy'), e.from, e.to, e.agreement]),
+        headStyles: { fillColor: [113, 113, 122] },
+      });
+    }
+
+    // Version Changes
+    if (project.versionChanges && project.versionChanges.length > 0) {
+      autoTable(doc, {
+        startY: (doc as any).lastAutoTable.finalY + 10,
+        head: [['Fecha', 'Solicitado por', 'Descripción', 'Impacto']],
+        body: project.versionChanges.map(c => [format(new Date(c.date), 'dd/MM/yyyy'), c.requestedBy, c.description, c.impact]),
+        headStyles: { fillColor: [234, 88, 12] },
+      });
+    }
 
     // Evidence Section
     let currentY = (doc as any).lastAutoTable.finalY + 20;
@@ -901,7 +1066,7 @@ export default function App() {
                         <Badge variant={project.status === 'APPROVED' ? 'success' : project.status === 'REJECTED' ? 'danger' : 'info'}>
                           {getStatusLabel(project.status)}
                         </Badge>
-                        <Button variant="ghost" size="sm" onClick={() => { setSelectedProject(project); setActiveTab('projects'); }}>
+                        <Button variant="ghost" size="sm" onClick={() => { setSelectedProject(project); setActiveTab('projects'); setValidationError(null); }}>
                           Ver Detalles
                         </Button>
                       </div>
@@ -961,11 +1126,12 @@ export default function App() {
                           paddingAngle={5}
                           dataKey="value"
                         >
-                          <Cell fill="#18181b" />
-                          <Cell fill="#71717a" />
-                          <Cell fill="#d4d4d8" />
+                          {stats.sourceData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          ))}
                         </Pie>
                         <Tooltip />
+                        <Legend verticalAlign="bottom" height={36} />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
@@ -1012,7 +1178,7 @@ export default function App() {
                   </div>
                   <div className="grid grid-cols-1 gap-4">
                     {filteredProjects.map(project => (
-                    <Card key={project.id} className="group cursor-pointer p-6 transition-all hover:border-zinc-900" onClick={() => setSelectedProject(project)}>
+                    <Card key={project.id} className="group cursor-pointer p-6 transition-all hover:border-zinc-900" onClick={() => { setSelectedProject(project); setValidationError(null); }}>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-6">
                           <span className="font-mono text-sm font-bold text-zinc-400">{project.code}</span>
@@ -1047,7 +1213,7 @@ export default function App() {
               ) : (
                 <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-8">
                   <div className="flex items-center justify-between">
-                    <Button variant="ghost" onClick={() => setSelectedProject(null)} className="gap-2">
+                    <Button variant="ghost" onClick={() => { setSelectedProject(null); setValidationError(null); }} className="gap-2">
                       ← Volver a la lista
                     </Button>
                     <div className="flex gap-2">
@@ -1059,7 +1225,10 @@ export default function App() {
                       <Button variant="outline" onClick={() => exportToPDF(selectedProject)} className="gap-2">
                         <Download size={16} /> Exportar PDF
                       </Button>
-                      <Button variant="danger" onClick={() => deleteProject(selectedProject.id)} className="gap-2">
+                      <Button variant="outline" onClick={() => setIsChangeModalOpen(true)} className="gap-2 text-orange-600 border-orange-200 hover:bg-orange-50">
+                        <AlertCircle size={16} /> Solicitar Cambio
+                      </Button>
+                      <Button variant="danger" onClick={() => { setProjectToDelete(selectedProject); setIsDeleteModalOpen(true); }} className="gap-2">
                         Borrar Proyecto
                       </Button>
                     </div>
@@ -1191,6 +1360,16 @@ export default function App() {
 
                         {/* Step Content */}
                         <div className="space-y-8">
+                          {validationError && (
+                            <motion.div 
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="p-4 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm flex items-start gap-3"
+                            >
+                              <AlertCircle size={18} className="shrink-0 mt-0.5" />
+                              <p>{validationError}</p>
+                            </motion.div>
+                          )}
                           {selectedProject.currentStep === 1 && (
                             <div className="space-y-4">
                               <h4 className="font-semibold">Paso 1: Planificación y Elementos de Entrada</h4>
@@ -1204,13 +1383,70 @@ export default function App() {
                                   <p className="text-sm">{selectedProject.planning.startDate}</p>
                                 </div>
                               </div>
-                              <textarea 
-                                placeholder="Describa los elementos de entrada (requisitos, normas, etc)..."
-                                className="w-full rounded-lg border border-zinc-200 p-3 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
-                                rows={4}
-                                defaultValue={selectedProject.planning.inputs}
-                                onBlur={(e) => updateProjectStep(selectedProject.id, 1, { 'planning.inputs': e.target.value })}
-                              />
+                              <div className="space-y-4">
+                                <div>
+                                  <label className="text-xs font-bold uppercase text-zinc-500">Requisitos Funcionales (Propiedades Técnicas)</label>
+                                  <textarea 
+                                    placeholder="Describa las propiedades técnicas del producto..."
+                                    className="mt-1 w-full rounded-lg border border-zinc-200 p-3 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                                    rows={2}
+                                    defaultValue={selectedProject.planning.functionalRequirements}
+                                    onBlur={(e) => updateProjectStep(selectedProject.id, 1, { 'planning.functionalRequirements': e.target.value })}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs font-bold uppercase text-zinc-500">Requisitos Legales (Normas, Rotulado, etc.)</label>
+                                  <textarea 
+                                    placeholder="Normas bromatológicas, requisitos de rotulado..."
+                                    className="mt-1 w-full rounded-lg border border-zinc-200 p-3 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                                    rows={2}
+                                    defaultValue={selectedProject.planning.legalRequirements}
+                                    onBlur={(e) => updateProjectStep(selectedProject.id, 1, { 'planning.legalRequirements': e.target.value })}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs font-bold uppercase text-zinc-500">Diseños Previos (Historial Técnico)</label>
+                                  <textarea 
+                                    placeholder="Historial o base técnica de otros proyectos..."
+                                    className="mt-1 w-full rounded-lg border border-zinc-200 p-3 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                                    rows={2}
+                                    defaultValue={selectedProject.planning.previousDesigns}
+                                    onBlur={(e) => updateProjectStep(selectedProject.id, 1, { 'planning.previousDesigns': e.target.value })}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs font-bold uppercase text-zinc-500">Riesgos y Fallas Potenciales</label>
+                                  <textarea 
+                                    placeholder="Análisis de qué puede salir mal..."
+                                    className="mt-1 w-full rounded-lg border border-zinc-200 p-3 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                                    rows={2}
+                                    defaultValue={selectedProject.planning.risksAndFailures}
+                                    onBlur={(e) => updateProjectStep(selectedProject.id, 1, { 'planning.risksAndFailures': e.target.value })}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs font-bold uppercase text-zinc-500">Recursos Críticos</label>
+                                  <textarea 
+                                    placeholder="Insumos especiales o personal necesario..."
+                                    className="mt-1 w-full rounded-lg border border-zinc-200 p-3 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                                    rows={2}
+                                    defaultValue={selectedProject.planning.criticalResources}
+                                    onBlur={(e) => updateProjectStep(selectedProject.id, 1, { 'planning.criticalResources': e.target.value })}
+                                  />
+                                </div>
+                                {selectedProject.source === 'ARTE' && (
+                                  <div>
+                                    <label className="text-xs font-bold uppercase text-zinc-500">Link a Tarjeta Trello (Obligatorio)</label>
+                                    <input 
+                                      type="url"
+                                      placeholder="https://trello.com/..."
+                                      className="mt-1 w-full rounded-lg border border-zinc-200 p-2.5 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                                      defaultValue={selectedProject.trelloLink || ''}
+                                      onBlur={(e) => updateProjectStep(selectedProject.id, 1, { trelloLink: e.target.value })}
+                                    />
+                                  </div>
+                                )}
+                              </div>
                               <MediaSection step={1} />
                               <Button onClick={() => { updateProjectStep(selectedProject.id, 2, {}, revisionComment, 'Pasar a Ejecución'); setRevisionComment(''); }}>Pasar a Ejecución</Button>
                             </div>
@@ -1219,13 +1455,36 @@ export default function App() {
                           {selectedProject.currentStep === 2 && (
                             <div className="space-y-4">
                               <h4 className="font-semibold">Paso 2: Ejecución</h4>
-                              <textarea 
-                                placeholder="Detalles de la ejecución técnica..."
-                                className="w-full rounded-md border border-zinc-200 p-3 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-900"
-                                rows={6}
-                                defaultValue={selectedProject.execution.details}
-                                onBlur={(e) => updateProjectStep(selectedProject.id, 2, { 'execution.details': e.target.value, 'execution.date': new Date().toISOString() })}
-                              />
+                              <div>
+                                <label className="text-xs font-bold uppercase text-zinc-500">Detalles de la Ejecución Técnica</label>
+                                <textarea 
+                                  placeholder="Detalles de la ejecución técnica..."
+                                  className="mt-1 w-full rounded-md border border-zinc-200 p-3 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                                  rows={4}
+                                  defaultValue={selectedProject.execution.details}
+                                  onBlur={(e) => updateProjectStep(selectedProject.id, 2, { 'execution.details': e.target.value, 'execution.date': new Date().toISOString() })}
+                                />
+                              </div>
+                              <div>
+                                <label className="text-xs font-bold uppercase text-zinc-500">Resultado de Validación Inicial (Prototipo)</label>
+                                <textarea 
+                                  placeholder="Resultado de la validación inicial..."
+                                  className="mt-1 w-full rounded-md border border-zinc-200 p-3 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                                  rows={2}
+                                  defaultValue={selectedProject.execution.initialValidationResult}
+                                  onBlur={(e) => updateProjectStep(selectedProject.id, 2, { 'execution.initialValidationResult': e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <label className="text-xs font-bold uppercase text-zinc-500">Evidencia de la Validación Inicial</label>
+                                <textarea 
+                                  placeholder="Evidencia de la validación inicial (URL o descripción)..."
+                                  className="mt-1 w-full rounded-md border border-zinc-200 p-3 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                                  rows={2}
+                                  defaultValue={selectedProject.execution.initialValidationEvidence}
+                                  onBlur={(e) => updateProjectStep(selectedProject.id, 2, { 'execution.initialValidationEvidence': e.target.value })}
+                                />
+                              </div>
                               <MediaSection step={2} />
                               <div className="flex gap-4">
                                 <Button onClick={() => { updateProjectStep(selectedProject.id, 1, {}, revisionComment, 'Volver a Planificación'); setRevisionComment(''); }} variant="outline">Volver a Planificación</Button>
@@ -1239,20 +1498,23 @@ export default function App() {
                               <h4 className="font-semibold">Paso 3: Controles (Revisión y Verificación)</h4>
                               <div className="space-y-4">
                                 <div>
-                                  <label className="text-xs font-medium text-zinc-500">Revisión</label>
+                                  <label className="text-xs font-medium text-zinc-500">Minuta de Revisión</label>
                                   <textarea 
                                     className="w-full rounded-md border border-zinc-200 p-3 text-sm"
-                                    defaultValue={selectedProject.controls.review}
-                                    onBlur={(e) => updateProjectStep(selectedProject.id, 3, { 'controls.review': e.target.value })}
+                                    rows={4}
+                                    defaultValue={selectedProject.controls.reviewMinutes}
+                                    onBlur={(e) => updateProjectStep(selectedProject.id, 3, { 'controls.reviewMinutes': e.target.value })}
                                   />
                                 </div>
-                                <div>
-                                  <label className="text-xs font-medium text-zinc-500">Verificación</label>
-                                  <textarea 
-                                    className="w-full rounded-md border border-zinc-200 p-3 text-sm"
-                                    defaultValue={selectedProject.controls.verification}
-                                    onBlur={(e) => updateProjectStep(selectedProject.id, 3, { 'controls.verification': e.target.value })}
+                                <div className="flex items-center gap-2">
+                                  <input 
+                                    type="checkbox"
+                                    id="verificationConfirmation"
+                                    className="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
+                                    defaultChecked={selectedProject.controls.verificationConfirmation}
+                                    onChange={(e) => updateProjectStep(selectedProject.id, 3, { 'controls.verificationConfirmation': e.target.checked })}
                                   />
+                                  <label htmlFor="verificationConfirmation" className="text-sm font-medium text-zinc-700">Confirmar Verificación (Cumplimiento de Requisitos)</label>
                                 </div>
                               </div>
                               <MediaSection step={3} />
@@ -1284,17 +1546,40 @@ export default function App() {
                           {selectedProject.currentStep === 5 && (
                             <div className="space-y-4">
                               <h4 className="font-semibold">Paso 5: Validación Final</h4>
-                              <textarea 
-                                placeholder="Evidencia de que el producto cumple con el uso previsto..."
-                                className="w-full rounded-md border border-zinc-200 p-3 text-sm"
-                                rows={6}
-                                defaultValue={selectedProject.validation.check}
-                                onBlur={(e) => updateProjectStep(selectedProject.id, 5, { 'validation.check': e.target.value })}
-                              />
+                              <div>
+                                <label className="text-xs font-bold uppercase text-zinc-500">Validación Final (Conclusión)</label>
+                                <textarea 
+                                  placeholder="Escriba la conclusión de la validación final..."
+                                  className="mt-1 w-full rounded-md border border-zinc-200 p-3 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                                  rows={4}
+                                  defaultValue={selectedProject.validation.finalValidation}
+                                  onBlur={(e) => updateProjectStep(selectedProject.id, 5, { 'validation.finalValidation': e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <label className="text-xs font-bold uppercase text-zinc-500">Contraste con Validación Inicial (Solo Lectura)</label>
+                                <div className="mt-1 w-full rounded-md border border-zinc-100 bg-zinc-50 p-3 text-sm text-zinc-600 italic">
+                                  {selectedProject.execution.initialValidationResult || 'No se registró validación inicial.'}
+                                </div>
+                              </div>
+                              <div>
+                                <label className="text-xs font-bold uppercase text-zinc-500">Conclusión del Contraste</label>
+                                <textarea 
+                                  placeholder="Escriba el contraste entre la validación final y la inicial..."
+                                  className="mt-1 w-full rounded-md border border-zinc-200 p-3 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                                  rows={4}
+                                  defaultValue={selectedProject.validation.contrastWithInitial}
+                                  onBlur={(e) => updateProjectStep(selectedProject.id, 5, { 'validation.contrastWithInitial': e.target.value })}
+                                />
+                              </div>
                               <MediaSection step={5} />
                               <div className="flex flex-wrap gap-4">
                                 <Button onClick={() => { updateProjectStep(selectedProject.id, 4, {}, revisionComment, 'Volver a Salidas'); setRevisionComment(''); }} variant="outline">Volver a Salidas</Button>
-                                <Button onClick={() => { updateProjectStep(selectedProject.id, 6, {}, revisionComment, 'Aprobar Proyecto'); setRevisionComment(''); }} className="bg-emerald-600 hover:bg-emerald-700">Aprobar Proyecto</Button>
+                                <Button 
+                                  onClick={() => { updateProjectStep(selectedProject.id, 6, {}, revisionComment, 'Aprobar Proyecto'); setRevisionComment(''); }} 
+                                  className="bg-emerald-600 hover:bg-emerald-700"
+                                  disabled={!selectedProject.validation.finalValidation || !selectedProject.validation.contrastWithInitial}
+                                >Aprobar Proyecto</Button>
                                 <Button onClick={() => { updateProjectStep(selectedProject.id, 7, {}, revisionComment, 'Rechazar Proyecto'); setRevisionComment(''); }} variant="danger">Rechazar Proyecto</Button>
                                 <Button onClick={() => { updateProjectStep(selectedProject.id, 8, {}, revisionComment, 'Enviar a Revisión'); setRevisionComment(''); }} variant="outline">Enviar a Revisión</Button>
                               </div>
@@ -1347,6 +1632,59 @@ export default function App() {
                               )}
                             </div>
                           )}
+
+                          {/* Coordination Log & Change Control Section */}
+                          <div className="mt-12 space-y-8 border-t border-zinc-100 pt-8">
+                            <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
+                              <div className="space-y-4">
+                                <div className="flex items-center justify-between">
+                                  <h4 className="text-sm font-bold uppercase tracking-wider text-zinc-900">Bitácora de Coordinación</h4>
+                                  <Users size={16} className="text-zinc-400" />
+                                </div>
+                                <div className="space-y-3">
+                                  {selectedProject.coordinationLog?.map((entry) => (
+                                    <div key={entry.id} className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 text-xs">
+                                      <div className="mb-1 flex justify-between font-bold text-zinc-400">
+                                        <span>{entry.from} → {entry.to}</span>
+                                        <span>{format(new Date(entry.date), 'dd/MM/yyyy')}</span>
+                                      </div>
+                                      <p className="text-zinc-700">{entry.agreement}</p>
+                                    </div>
+                                  ))}
+                                  <form onSubmit={addCoordinationEntry} className="space-y-2 pt-2">
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <input name="from" placeholder="De..." className="rounded border border-zinc-200 p-1.5 text-xs" required />
+                                      <input name="to" placeholder="A..." className="rounded border border-zinc-200 p-1.5 text-xs" required />
+                                    </div>
+                                    <textarea name="agreement" placeholder="Acuerdo o comunicación..." className="w-full rounded border border-zinc-200 p-1.5 text-xs" rows={2} required />
+                                    <Button type="submit" size="sm" variant="outline" className="w-full text-[10px]">Registrar Coordinación</Button>
+                                  </form>
+                                </div>
+                              </div>
+
+                              <div className="space-y-4">
+                                <div className="flex items-center justify-between">
+                                  <h4 className="text-sm font-bold uppercase tracking-wider text-zinc-900">Control de Cambios</h4>
+                                  <AlertCircle size={16} className="text-zinc-400" />
+                                </div>
+                                <div className="space-y-3">
+                                  {selectedProject.versionChanges?.map((change) => (
+                                    <div key={change.id} className="rounded-lg border border-orange-100 bg-orange-50/30 p-3 text-xs">
+                                      <div className="mb-1 flex justify-between font-bold text-orange-800">
+                                        <span>Solicitado por: {change.requestedBy}</span>
+                                        <span>{format(new Date(change.date), 'dd/MM/yyyy')}</span>
+                                      </div>
+                                      <p className="mb-1 font-semibold text-zinc-900">{change.description}</p>
+                                      <p className="text-zinc-500 italic">Impacto: {change.impact}</p>
+                                    </div>
+                                  ))}
+                                  {(!selectedProject.versionChanges || selectedProject.versionChanges.length === 0) && (
+                                    <p className="text-xs text-zinc-400 italic">No hay cambios registrados.</p>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       </Card>
                     </div>
@@ -1357,11 +1695,24 @@ export default function App() {
                         <div className="space-y-4">
                           <div>
                             <p className="text-[10px] uppercase text-zinc-400">Origen</p>
-                            <p className="text-sm font-medium">{selectedProject.source === 'RECLAMO' ? 'Reclamo' : selectedProject.source === 'COMMERCIAL' ? 'Dpto. Comercial' : selectedProject.source === 'DESIGN_DEVELOPMENT' ? 'Diseño & Desarrollo' : 'Producción'}</p>
+                            <p className="text-sm font-medium flex items-center gap-2">
+                              {selectedProject.source === 'RECLAMO' ? 'Reclamo' : 
+                               selectedProject.source === 'COMMERCIAL' ? 'Dpto. Comercial' : 
+                               selectedProject.source === 'PRODUCTION' ? 'Producción' :
+                               selectedProject.source === 'ARTE' ? 'Arte' :
+                               selectedProject.source === 'GERENCIA' ? 'Gerencia' :
+                               selectedProject.source === 'CALIDAD' ? 'Calidad' :
+                               'Diseño & Desarrollo'}
+                              {selectedProject.source === 'RECLAMO' && selectedProject.complaintNumber && (
+                                <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700">
+                                  #{selectedProject.complaintNumber}
+                                </span>
+                              )}
+                            </p>
                           </div>
                           <div>
                             <p className="text-[10px] uppercase text-zinc-400">Creado por</p>
-                            <p className="text-sm font-medium">{userProfile?.displayName || 'Usuario'}</p>
+                            <p className="text-sm font-medium">{selectedProject.creatorName || 'Usuario'}</p>
                           </div>
                           <div>
                             <p className="text-[10px] uppercase text-zinc-400">Fecha Creación</p>
@@ -1452,7 +1803,9 @@ export default function App() {
                       <option value="COMMERCIAL">Dpto. Comercial</option>
                       <option value="PRODUCTION">Producción</option>
                       <option value="RECLAMO">Reclamo</option>
-                      <option value="DESIGN_DEVELOPMENT">Diseño & Desarrollo</option>
+                      <option value="ARTE">Arte</option>
+                      <option value="GERENCIA">Gerencia</option>
+                      <option value="CALIDAD">Calidad</option>
                     </select>
                   </div>
                   <div>
@@ -1460,6 +1813,12 @@ export default function App() {
                     <input name="responsible" defaultValue={userProfile?.displayName} required className="mt-1 w-full rounded-lg border border-zinc-200 p-2.5 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900" />
                   </div>
                 </div>
+                {newProjectSource === 'ARTE' && (
+                  <div>
+                    <label className="block text-xs font-medium uppercase text-zinc-500">Link a Tarjeta Trello (Obligatorio)</label>
+                    <input name="trelloLink" required type="url" placeholder="https://trello.com/..." className="mt-1 w-full rounded-lg border border-zinc-200 p-2.5 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900" />
+                  </div>
+                )}
                 {newProjectSource === 'RECLAMO' && (
                   <div>
                     <label className="block text-xs font-medium uppercase text-zinc-500">Número de Reclamo</label>
@@ -1475,6 +1834,54 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Change Request Modal */}
+      <AnimatePresence>
+        {isChangeModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              onClick={() => setIsChangeModalOpen(false)}
+              className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-lg rounded-xl bg-white p-8 shadow-2xl"
+            >
+              <h3 className="mb-6 text-xl font-bold">Solicitar Cambio de Diseño</h3>
+              <form onSubmit={handleChangeRequest} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium uppercase text-zinc-500">Descripción del Cambio</label>
+                  <textarea name="description" required className="mt-1 w-full rounded-lg border border-zinc-200 p-2.5 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900" rows={3} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium uppercase text-zinc-500">Impacto (Costo, Tiempo, Calidad)</label>
+                  <input name="impact" required className="mt-1 w-full rounded-lg border border-zinc-200 p-2.5 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium uppercase text-zinc-500">Solicitado por</label>
+                  <input name="requestedBy" required className="mt-1 w-full rounded-lg border border-zinc-200 p-2.5 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900" />
+                </div>
+                <div className="flex gap-3 pt-4">
+                  <Button type="button" variant="outline" onClick={() => setIsChangeModalOpen(false)} className="flex-1">Cancelar</Button>
+                  <Button type="submit" className="flex-1">Enviar Solicitud</Button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    <ConfirmationModal 
+      isOpen={isDeleteModalOpen}
+      onClose={() => setIsDeleteModalOpen(false)}
+      onConfirm={handleDeleteProject}
+      title="Eliminar Proyecto"
+      message="¿Confirmas que deseas eliminar este registro? Esta acción destruye evidencia objetiva del SGC requerida por la norma."
+    />
     </div>
   );
 }
