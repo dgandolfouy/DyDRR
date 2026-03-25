@@ -191,14 +191,16 @@ export default function App() {
         try {
           const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
           if (userDoc.exists()) {
-            setUserProfile(userDoc.data() as UserProfile);
+            const profile = userDoc.data() as UserProfile;
+            // Temporarily treat everyone as admin in the UI
+            setUserProfile({ ...profile, role: 'admin' });
           } else {
             // Create default profile for new users
             const newProfile: UserProfile = {
               uid: firebaseUser.uid,
               email: firebaseUser.email || '',
               displayName: firebaseUser.displayName || 'User',
-              role: firebaseUser.email === 'daniel.gandolfo@gmail.com' ? 'admin' : 'viewer',
+              role: 'admin', // Everyone is an admin for now
               createdAt: new Date().toISOString(),
             };
             try {
