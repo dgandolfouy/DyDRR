@@ -117,29 +117,18 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && 
-                    (request.resource.data.role == 'viewer' || (isBootstrapAdmin() && request.resource.data.role == 'admin'));
-      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data) && 
-                    (isAdmin() || request.resource.data.role == resource.data.role);
+      allow read, write: if isAuthenticated();
     }
 
     match /projects/{projectId} {
-      allow read, write: if isBootstrapAdmin();
-      allow read: if isAuthenticated();
-      allow create: if isAuditor() && isValidProjectCreate(request.resource.data);
-      allow update: if isAuditor() && isValidProjectUpdate(request.resource.data);
-      allow delete: if isAdmin();
+      allow read, write: if isAuthenticated();
 
       match /revisions/{revisionId} {
-        allow read: if isAuthenticated();
-        allow create: if isAuthenticated() && isValidRevision(request.resource.data);
+        allow read, write: if isAuthenticated();
       }
 
       match /media/{mediaId} {
-        allow read: if isAuthenticated();
-        allow create: if isAuthenticated() && isValidMedia(request.resource.data);
-        allow delete: if isAdmin();
+        allow read, write: if isAuthenticated();
       }
     }
   }
